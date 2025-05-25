@@ -1,65 +1,93 @@
-node{
-    
-    def mavenHome
-    def mavenCMD
-    def docker
-    def dockerCMD
-    def tagName
-    
-    stage('prepare enviroment'){
-        echo 'initialize all the variables'
-        mavenHome = tool name: 'maven' , type: 'maven'
-        mavenCMD = "${mavenHome}/bin/mvn"
-        docker = tool name: 'docker' , type: 'org.jenkinsci.plugins.docker.commons.tools.DockerTool'
-        dockerCMD = "${docker}/bin/docker"
-        tagName="3.0"
+pipeline {
+    agent any
+
+    environment {
+        AWS_DEFAULT_REGION = 'us-east-1'
+        TERRAFORM_DIR = 'terraform'
+        IMAGE_NAME = 'insurancedev'
+        DOCKER_USER = 'ashwinr2001'
+        BRANCH_TAG = "${env.BRANCH_NAME}-${env.BUILD_NUMBER}".replaceAll('/', '-')
+        FULL_IMAGE = "${DOCKER_USER}/${IMAGE_NAME}:${BRANCH_TAG}"
     }
-    
-    stage('git code checkout'){
-        try{
-            echo 'checkout the code from git repository'
-            git 'https://github.com/shubhamkushwah123/star-agile-insurance-project.git'
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
         }
-        catch(Exception e){
-            echo 'Exception occured in Git Code Checkout Stage'
-            currentBuild.result = "FAILURE"
-            emailext body: '''Dear All,
-            The Jenkins job ${JOB_NAME} has been failed. Request you to please have a look at it immediately by clicking on the below link. 
-            ${BUILD_URL}''', subject: 'Job ${JOB_NAME} ${BUILD_NUMBER} is failed', to: 'shubham@gmail.com'
+
+        stage('Clone Repo') {
+            steps {
+                git branch: 'dev', url: 'https://github.com/ashwinr200/Insurance.git'
+            }
         }
-    }
-    
-    stage('Build the Application'){
-        echo "Cleaning... Compiling...Testing... Packaging..."
-        //sh 'mvn clean package'
-        sh "${mavenCMD} clean package"        
-    }
-    
-    stage('publish test reports'){
-        publishHTML([allowMissing: false, alwaysLinkToLastBuild: false, keepAll: false, reportDir: '/var/lib/jenkins/workspace/Capstone-Project-Live-Demo/target/surefire-reports', reportFiles: 'index.html', reportName: 'HTML Report', reportTitles: '', useWrapperFileDirectly: true])
-    }
-    
-    stage('Containerize the application'){
-        echo 'Creating Docker image'
-        sh "${dockerCMD} build -t shubhamkushwah123/insure-me:${tagName} ."
-    }
-    
-    stage('Pushing it ot the DockerHub'){
-        echo 'Pushing the docker image to DockerHub'
-        withCredentials([string(credentialsId: 'dock-password', variable: 'dockerHubPassword')]) {
-        sh "${dockerCMD} login -u shubhamkushwah123 -p ${dockerHubPassword}"
-        sh "${dockerCMD} push shubhamkushwah123/insure-me:${tagName}"
-            
+
+        stage('Build with Maven') {
+            steps {
+                sh 'mvn clean package'
+            }
         }
-        
-    stage('Configure and Deploy to the test-server'){
-        ansiblePlaybook become: true, credentialsId: 'ansible-key', disableHostKeyChecking: true, installation: 'ansible', inventory: '/etc/ansible/hosts', playbook: 'ansible-playbook.yml'
+
+        stage('Build Docker Image') {
+            steps {
+                sh "docker build -t ${FULL_IMAGE} ."
+            }
+        }
+
+        stage('Push to Docker Hub') {
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'dockerhub-creds-id', usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD')]) {
+                    sh """
+                        echo "$PASSWORD" | docker login -u "$USERNAME" --password-stdin
+                        docker push ${FULL_IMAGE}
+                    """
+                }
+            }
+        }
+
+
+        stage('Deploy to Kubernetes via Ansible') {
+            steps {
+                ansiblePlaybook credentialsId: 'ssh-key-ansadm', 
+                                installation: 'ansible2', 
+                                inventory: '/etc/ansible/hosts', 
+                                playbook: 'ansible-deploy.yml', 
+                                vaultTmpPath: '',
+                     extraVars: [
+                            build_tag: "${BRANCH_TAG}",
+                            image_name: "${FULL_IMAGE}"
+                        ]
+               
+            }  }
+
+
     }
-        
-        
+   post {
+    always {
+        echo 'Pipeline completed - cleaning up workspace'
+        cleanWs()
+    }
+    failure {
+        mail to: 'azureashwin25@gmail.com',
+             subject: "FAILED: Pipeline ${currentBuild.fullDisplayName}",
+             body: "Check build ${env.BUILD_URL} for details"
+    }
+    success {
+        mail to: 'azureashwin25@gmail.com',
+             subject: "SUCCESS: Pipeline ${currentBuild.fullDisplayName}",
+             body: """
+             Insurance Dev Deployment completed successfully!
+
+             Master Node:
+             - Public IP: ${env.MASTER_PUBLIC_IP}:30002
+             - Private IP: ${env.MASTER_PRIVATE_IP}
+             - Prometheus : ${env.MASTER_PUBLIC_IP}:9090
+
+             Worker Node:
+             - Public IP: ${env.NODE_PUBLIC_IP}:30002
+             - Private IP: ${env.NODE_PRIVATE_IP}
+             """
     }
 }
-
-
-
-
+}
