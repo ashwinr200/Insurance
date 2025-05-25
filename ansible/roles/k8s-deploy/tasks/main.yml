@@ -1,0 +1,10 @@
+# tasks/main.yml
+
+- name: Template deployment file
+  template:
+    src: /tmp/Healthcare/ansible/roles/k8s-deploy/files/deployment.yml.j2
+    dest: /tmp/Healthcare/ansible/roles/k8s-deploy/files/deployment.yml
+
+
+- name: Deploy app using kubectl
+  shell: kubectl apply -f /tmp/Healthcare/ansible/roles/k8s-deploy/files/deployment.yml
