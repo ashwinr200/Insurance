@@ -9,6 +9,7 @@ data "aws_subnets" "selected" {
   }
 }
 
+
 resource "aws_instance" "master" {
   ami                         = var.ami_id
   instance_type               = var.instance_type
@@ -17,32 +18,17 @@ resource "aws_instance" "master" {
   key_name                    = var.key_name
   associate_public_ip_address = true
 
+ root_block_device {
+    volume_size = 30            # Increase to 30 GB
+    volume_type = "gp3"
+    delete_on_termination = true
+  }
+
   tags = {
-    Name = "${var.env}_master"
+    Name = "${var.env}-Master"
     Role = "master"
   }
 
-user_data = <<-EOF
-#!/bin/bash
-set -x
-
-wget -q https://github.com/ashwinr200/Finance/raw/refs/heads/dev/setup-ansible-master.sh -O /tmp/setup-ansible-master.sh
-chmod +x /tmp/setup-ansible-master.sh
-/tmp/setup-ansible-master.sh
-
-wget -q https://github.com/ashwinr200/Finance/raw/refs/heads/dev/prometheus.sh -O /tmp/prometheus.sh
-chmod +x /tmp/prometheus.sh
-/tmp/prometheus.sh
-
-wget -q https://github.com/ashwinr200/Finance/raw/refs/heads/dev/docker.sh -O /tmp/docker.sh
-chmod +x /tmp/docker.sh
-/tmp/docker.sh
-
-wget -q https://github.com/ashwinr200/Finance/raw/refs/heads/dev/k8s%20master.sh -O /tmp/k8s-master.sh
-chmod +x /tmp/k8s-master.sh
-/tmp/k8s-master.sh
-
-EOF
 
 }
 resource "aws_instance" "node" {
@@ -53,30 +39,17 @@ resource "aws_instance" "node" {
   key_name                    = var.key_name
   associate_public_ip_address = true
 
+ root_block_device {
+    volume_size = 30            # Increase to 30 GB
+    volume_type = "gp3"
+    delete_on_termination = true
+  }
+
   tags = {
-    Name = "${var.env}_node"
+    Name = "${var.env}-Node"
     Role = "node"
   }
 
- user_data = <<-EOF
-  #!/bin/bash
-set -x  # Enable debug and exit on error
-
-# Download and run ansible node setup
-wget -q https://github.com/ashwinr200/Finance/raw/refs/heads/dev/setup-ansible-node.sh -O /tmp/setup-ansible-node.sh
-chmod +x /tmp/setup-ansible-node.sh
-/tmp/setup-ansible-node.sh
-
-# Download and run prometheus setup
-wget -q https://github.com/ashwinr200/Finance/raw/refs/heads/dev/prometheus.sh -O /tmp/prometheus.sh
-chmod +x /tmp/prometheus.sh
-/tmp/prometheus.sh
-
-# Download and run k8s node setup
-wget -q https://github.com/ashwinr200/Finance/raw/refs/heads/dev/k8s-node.sh -O /tmp/k8s-node.sh
-chmod +x /tmp/k8s-node.sh
-/tmp/k8s-node.sh
 
 
-  EOF
 }
