@@ -5,26 +5,13 @@ pipeline {
         AWS_DEFAULT_REGION = 'us-east-1'
         TERRAFORM_DIR = 'terraform'
         ANSIBLE_DIR = 'ansible'
-        IMAGE_NAME = 'financestage'
+        IMAGE_NAME = 'insurancestage'
         DOCKER_USER = 'ashwinr2001'
         BRANCH_TAG = "${env.BRANCH_NAME}-${env.BUILD_NUMBER}".replaceAll('/', '-')
         FULL_IMAGE = "${DOCKER_USER}/${IMAGE_NAME}:${BRANCH_TAG}"
         ENVIRONMENT = "${env.BRANCH_NAME == 'prod' ? 'prod' : 'stage'}"
     }
-
-    stages {
-        stage('Checkout') {
-            steps {
-                checkout scm
-            }
-        }
-
-        stage('Clone Repo') {
-            steps {
-                git branch: 'stage', url: 'https://github.com/ashwinr200/Finance.git'
-            }
-        }
-
+stages{
         // ---------------- INFRA ----------------
         stage('Terraform Init') {
             steps {
@@ -343,39 +330,39 @@ stage('Provision ansadmin on Node') {
     }
 }
 
-        stage('Join Node to Kubernetes Master') {
-            steps {
-                withCredentials([sshUserPrivateKey(
-                    credentialsId: 'ssh-key-ansadmin1',
-                    keyFileVariable: 'SSH_KEY'
-                )]) {
-                    script {
-                        // Fetch join command from master
-                        def joinCommand = sh(
-                            script: """
-                            ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ansadmin@${env.MASTER_PUBLIC_IP} '
-                                sudo kubeadm token create --print-join-command
-                            '
-                            """,
-                            returnStdout: true
-                        ).trim()
-
-                        // Append CRI socket path
-                        def fullJoinCommand = "${joinCommand} --cri-socket unix:///var/run/cri-dockerd.sock"
-                        echo "Executing on node: ${fullJoinCommand}"
-
-                        // Run join command on the node
-                        sh """
-                        ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ansadmin@${env.NODE_PRIVATE_IP} '
-                            sudo ${fullJoinCommand}
+    stage('Join Node to Kubernetes Master') {
+    steps {
+        withCredentials([sshUserPrivateKey(
+            credentialsId: 'ssh-key-ansadmin1',
+            keyFileVariable: 'SSH_KEY'
+        )]) {
+            script {
+                // Fetch join command from master
+                def joinCommand = sh(
+                    script: """
+                        ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ansadmin@${env.MASTER_PUBLIC_IP} '
+                            sudo kubeadm token create --print-join-command
                         '
-                        """
-                    }
-                }
+                    """,
+                    returnStdout: true
+                ).trim()
+
+                // Append CRI socket path
+                def fullJoinCommand = "${joinCommand} --cri-socket unix:///var/run/cri-dockerd.sock"
+                echo "Executing on node: ${fullJoinCommand}"
+
+                // Run join command on the node
+                sh """
+                    ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ansadmin@${env.NODE_PRIVATE_IP} '
+                        sudo ${fullJoinCommand}
+                    '
+                """
             }
         }
+    }
+}
 
-        stage('Write Ansible Inventory') {
+stage('Write Ansible Inventory') {
     steps {
         sshagent(['ssh-key-ansadmin1']) {
             script {
@@ -392,7 +379,6 @@ ansible_user=ansadmin
 localhost ansible_connection=local ansible_user=ansadmin
 """
 
-                // Properly escape the content for SSH command
                 def escapedContent = inventoryContent
                     .replace('\\', '\\\\')
                     .replace('"', '\\"')
@@ -406,51 +392,133 @@ localhost ansible_connection=local ansible_user=ansadmin
             }
         }
     }
+}
+stage('Clone Repo on Master') {
+    steps {
+        sshagent(['ssh-key-ansadmin1']) {
+            sh """
+                ssh -o StrictHostKeyChecking=no ansadmin@${env.MASTER_PUBLIC_IP} '
+                    git clone -b stage https://github.com/ashwinr200/Insurance.git /tmp/Insurance
+                '
+            """
+        }
     }
-        stage('Build with Maven') {
-            steps {
-                sh 'mvn clean package'
-            }
-        }
+}
 
-        stage('Build Docker Image') {
-            steps {
-                sh "docker build -t ${FULL_IMAGE} ."
-            }
+stage('Build with Maven on Master') {
+    steps {
+        sshagent(['ssh-key-ansadmin1']) {
+            sh """
+                ssh -o StrictHostKeyChecking=no ansadmin@${env.MASTER_PUBLIC_IP} '
+                    cd /tmp/Insurance &&
+                    mvn clean package
+                '
+            """
         }
+    }
+}
 
-        stage('Push to Docker Hub') {
-            steps {
-                withCredentials([usernamePassword(credentialsId: 'dockerhub-creds-id', usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD')]) {
-                    sh """
-                        echo "$PASSWORD" | docker login -u "$USERNAME" --password-stdin
+stage('Build Docker Image on Master') {
+    steps {
+        sshagent(['ssh-key-ansadmin1']) {
+            sh """
+                ssh -o StrictHostKeyChecking=no ansadmin@${env.MASTER_PUBLIC_IP} '
+                    cd /tmp/Insurance &&
+                    docker build -t ${FULL_IMAGE} .
+                '
+            """
+        }
+    }
+}
+
+stage('Push Docker Image from Master') {
+    steps {
+        sshagent(['ssh-key-ansadmin1']) {
+            withCredentials([usernamePassword(credentialsId: 'dockerhub-creds-id', usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD')]) {
+                sh """
+                    ssh -o StrictHostKeyChecking=no ansadmin@${env.MASTER_PUBLIC_IP} '
+                        echo "$PASSWORD" | docker login -u "$USERNAME" --password-stdin &&
                         docker push ${FULL_IMAGE}
-                    """
-                }
+                    '
+                """
             }
         }
-
-
-        stage('Deploy to Kubernetes via Ansible') {
-            steps {
-                ansiblePlaybook credentialsId: 'ssh-key-ansadm', 
-                                installation: 'ansible2', 
-                                inventory: '/etc/ansible/hosts', 
-                                playbook: 'ansible-deploy.yml', 
-                                vaultTmpPath: '',
-                     extraVars: [
-                            build_tag: "${BRANCH_TAG}",
-                            image_name: "${FULL_IMAGE}"
-                        ]
-               
-            }  }
     }
-    
+}
 
-  
-    post {
-        always {
-            cleanWs()
+stage('Run Ansible on Master') {
+    steps {
+        sshagent(['ssh-key-ansadmin1']) {
+            sh """
+                ssh -o StrictHostKeyChecking=no ansadmin@${env.MASTER_PUBLIC_IP} '
+                    cd /tmp/Insurance
+                   ansible-playbook -i "localhost," -c local ansible-deploy.yml --extra-vars "build_tag=${BRANCH_TAG} image_name=${FULL_IMAGE} master_ip=${env.MASTER_PUBLIC_IP} node_ip=${env.NODE_PUBLIC_IP}"
+                '
+            """
         }
     }
+}
+
+stage('Start Prometheus on Master') {
+    steps {
+        sshagent(['ssh-key-ansadmin1']) {
+            sh """
+             ssh -o StrictHostKeyChecking=no ansadmin@${env.MASTER_PUBLIC_IP} '
+                 cd /opt/node_exporter
+  nohup ./node_exporter --web.listen-address="0.0.0.0:9100" > /tmp/node_exporter.log 2>&1 &
+  cd /opt/prometheus
+ nohup ./prometheus > /tmp/prometheus.log 2>&1 &
+  exit 0
+                '
+            """
+        }
+    }
+}
+
+stage('Start Prometheus on Node') {
+    steps {
+        sshagent(['ssh-key-ansadmin1']) {
+            sh """
+                ssh -o StrictHostKeyChecking=no ansadmin@${env.NODE_PUBLIC_IP} '
+                     cd /opt/node_exporter
+  nohup ./node_exporter --web.listen-address="0.0.0.0:9101" > /tmp/node_exporter.log 2>&1 &
+  cd /opt/prometheus
+  nohup ./prometheus > /tmp/prometheus.log 2>&1 &
+  exit 0
+                '
+            """
+        }
+    }
+}
+
+
+}
+post {
+    always {
+        echo 'Pipeline completed - cleaning up workspace'
+        cleanWs()
+    }
+    failure {
+        mail to: 'azureashwin25@gmail.com',
+             subject: "FAILED: Pipeline ${currentBuild.fullDisplayName}",
+             body: "Check build ${env.BUILD_URL} for details"
+    }
+    success {
+        mail to: 'azureashwin25@gmail.com',
+             subject: "SUCCESS: Pipeline ${currentBuild.fullDisplayName}",
+             body: """
+             Insurance Staging Deployment completed successfully!
+
+             Master Node:
+             - Public IP: ${env.MASTER_PUBLIC_IP}:30002
+             - Private IP: ${env.MASTER_PRIVATE_IP}
+             - Prometheus : ${env.MASTER_PUBLIC_IP}:9090
+
+             Worker Node:
+             - Public IP: ${env.NODE_PUBLIC_IP}:30002
+             - Private IP: ${env.NODE_PRIVATE_IP}
+             """
+    }
+}
+
 }
