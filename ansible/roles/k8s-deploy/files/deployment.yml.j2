@@ -29,7 +29,7 @@ spec:
     app: insurance
   ports:
     - protocol: TCP
-      port: 8082         # Cluster-internal port
-      targetPort: 8082   # Container port
+      port: 8081         # Cluster-internal port
+      targetPort: 8081   # Container port
       nodePort: 30002     # External port on EC2 host
   type: NodePort
