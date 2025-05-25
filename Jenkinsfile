@@ -5,7 +5,7 @@ pipeline {
         AWS_DEFAULT_REGION = 'us-east-1'
         TERRAFORM_DIR = 'terraform'
         ANSIBLE_DIR = 'ansible'
-        IMAGE_NAME = 'insurancestage'
+        IMAGE_NAME = 'insuranceprod'
         DOCKER_USER = 'ashwinr2001'
         BRANCH_TAG = "${env.BRANCH_NAME}-${env.BUILD_NUMBER}".replaceAll('/', '-')
         FULL_IMAGE = "${DOCKER_USER}/${IMAGE_NAME}:${BRANCH_TAG}"
@@ -398,7 +398,7 @@ stage('Clone Repo on Master') {
         sshagent(['ssh-key-ansadmin1']) {
             sh """
                 ssh -o StrictHostKeyChecking=no ansadmin@${env.MASTER_PUBLIC_IP} '
-                    git clone -b stage https://github.com/ashwinr200/Insurance.git /tmp/Insurance
+                    git clone -b prod https://github.com/ashwinr200/Insurance.git /tmp/Insurance
                 '
             """
         }
@@ -507,7 +507,7 @@ post {
         mail to: 'azureashwin25@gmail.com',
              subject: "SUCCESS: Pipeline ${currentBuild.fullDisplayName}",
              body: """
-             Insurance Staging Deployment completed successfully!
+             Insurance Production Deployment completed successfully!
 
              Master Node:
              - Public IP: ${env.MASTER_PUBLIC_IP}:30002
